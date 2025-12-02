@@ -101,7 +101,85 @@ function osk_wallet_balance_shortcode($atts) {
     return ob_get_clean();
 }
 
-// [wallet_topup_form] - Show simple top-up form
+// [add_to_wallet] - FIXED: Show wallet top-up form (THIS IS THE MAIN FIX)
+add_shortcode('add_to_wallet', 'add_to_wallet_shortcode');
+
+function add_to_wallet_shortcode($atts) {
+    if (!is_user_logged_in()) {
+        return '<p>Please log in to add funds to your wallet.</p>';
+    }
+    
+    $atts = shortcode_atts(array(
+        'min' => '1',
+        'max' => '1000',
+        'step' => '1'
+    ), $atts, 'add_to_wallet');
+    
+    ob_start();
+    ?>
+    <div class="wallet-add-funds">
+        <h3>Add Funds to Wallet</h3>
+        <form id="wallet-topup-form" method="post" action="">
+            <?php wp_nonce_field('wallet_topup_action', 'wallet_topup_nonce'); ?>
+            <input type="hidden" name="action" value="add_to_wallet">
+            <div class="form-group">
+                <label for="amount">Amount ($):</label>
+                <input type="number" name="amount" id="amount" 
+                       min="<?php echo esc_attr($atts['min']); ?>" 
+                       max="<?php echo esc_attr($atts['max']); ?>" 
+                       step="<?php echo esc_attr($atts['step']); ?>" 
+                       value="<?php echo esc_attr($atts['min']); ?>"
+                       required>
+            </div>
+            <button type="submit" name="add_to_wallet_submit" class="button">Add Funds</button>
+        </form>
+        
+        <?php
+        if (isset($_POST['add_to_wallet_submit']) && wp_verify_nonce($_POST['wallet_topup_nonce'], 'wallet_topup_action')) {
+            $amount = floatval($_POST['amount']);
+            
+            if ($amount >= floatval($atts['min']) && $amount <= floatval($atts['max'])) {
+                $wallet_product_id = get_option('wallet_topup_product_id');
+                
+                if ($wallet_product_id) {
+                    // Clear any existing cart items
+                    WC()->cart->empty_cart();
+                    
+                    // Store amount in session
+                    if (isset(WC()->session)) {
+                        WC()->session->set('wallet_topup_amount', $amount);
+                    }
+                    
+                    // Add to cart with custom data
+                    $cart_item_data = array(
+                        'wallet_topup_amount' => $amount,
+                        'wallet_topup' => true
+                    );
+                    
+                    // Add product to cart
+                    $added = WC()->cart->add_to_cart($wallet_product_id, 1, 0, array(), $cart_item_data);
+                    
+                    if ($added) {
+                        // Redirect to checkout
+                        wp_safe_redirect(wc_get_checkout_url());
+                        exit;
+                    } else {
+                        echo '<p class="error">Failed to add to cart. Please try again.</p>';
+                    }
+                } else {
+                    echo '<p class="error">Wallet top-up product not found. Please contact admin.</p>';
+                }
+            } else {
+                echo '<p class="error">Please enter an amount between $' . esc_html($atts['min']) . ' and $' . esc_html($atts['max']) . '.</p>';
+            }
+        }
+        ?>
+    </div>
+    <?php
+    return ob_get_clean();
+}
+
+// [wallet_topup_form] - Alternative top-up form
 add_shortcode('wallet_topup_form', 'osk_wallet_topup_form_shortcode');
 
 function osk_wallet_topup_form_shortcode($atts) {
@@ -118,22 +196,16 @@ function osk_wallet_topup_form_shortcode($atts) {
     $user_id = get_current_user_id();
     $balance = floatval(get_user_meta($user_id, 'wallet_balance', true));
     
-    // Get the default top-up product
-    $topup_product = get_posts(array(
-        'post_type' => 'product',
-        'meta_key' => '_is_default_wallet_topup',
-        'meta_value' => 'yes',
-        'posts_per_page' => 1
-    ));
+    // Get the wallet top-up product
+    $wallet_product_id = get_option('wallet_topup_product_id');
     
-    if (empty($topup_product)) {
+    if (empty($wallet_product_id)) {
         return '<div class="osk-wallet-notice"><p>' . __('Wallet top-up is not available at the moment.', 'ordersoftwarekeys-wallet') . '</p></div>';
     }
     
-    $product_id = $topup_product[0]->ID;
-    $min_amount = get_post_meta($product_id, '_simple_topup_min_amount', true) ?: 1;
-    $max_amount = get_post_meta($product_id, '_simple_topup_max_amount', true) ?: 1000;
-    $default_amount = get_post_meta($product_id, '_simple_topup_default_amount', true) ?: 10;
+    $min_amount = 1;
+    $max_amount = 1000;
+    $default_amount = 10;
     
     ob_start();
     
@@ -147,8 +219,9 @@ function osk_wallet_topup_form_shortcode($atts) {
             </div>
             <?php endif; ?>
             
-            <form method="post" action="<?php echo wc_get_page_permalink('cart'); ?>" style="background: white; border: 1px solid #ddd; border-radius: 5px; padding: 15px;">
-                <input type="hidden" name="add-to-cart" value="<?php echo esc_attr($product_id); ?>">
+            <form method="post" action="">
+                <?php wp_nonce_field('wallet_topup_action', 'wallet_topup_nonce'); ?>
+                <input type="hidden" name="action" value="add_to_wallet">
                 
                 <div style="margin-bottom: 15px;">
                     <label style="display: block; margin-bottom: 5px; font-weight: bold; color: #333;">
@@ -162,7 +235,7 @@ function osk_wallet_topup_form_shortcode($atts) {
                                step="0.01" 
                                min="<?php echo esc_attr($min_amount); ?>" 
                                max="<?php echo esc_attr($max_amount); ?>" 
-                               name="topup_custom_amount" 
+                               name="amount" 
                                value="<?php echo esc_attr($default_amount); ?>"
                                style="width: 100%; padding: 10px 10px 10px 30px; border: 1px solid #ddd; border-radius: 4px;"
                                required>
@@ -172,18 +245,52 @@ function osk_wallet_topup_form_shortcode($atts) {
                     </div>
                 </div>
                 
-                <button type="submit" 
+                <button type="submit" name="add_to_wallet_submit"
                         style="width: 100%; background: #28a745; color: white; border: none; padding: 12px; border-radius: 4px; font-weight: bold; cursor: pointer;">
                     <?php _e('Add Funds', 'ordersoftwarekeys-wallet'); ?>
                 </button>
             </form>
+            
+            <?php
+            if (isset($_POST['add_to_wallet_submit']) && wp_verify_nonce($_POST['wallet_topup_nonce'], 'wallet_topup_action')) {
+                $amount = floatval($_POST['amount']);
+                
+                if ($amount >= $min_amount && $amount <= $max_amount) {
+                    if ($wallet_product_id) {
+                        // Clear any existing cart items
+                        WC()->cart->empty_cart();
+                        
+                        // Store amount in session
+                        if (isset(WC()->session)) {
+                            WC()->session->set('wallet_topup_amount', $amount);
+                        }
+                        
+                        // Add to cart with custom data
+                        $cart_item_data = array(
+                            'wallet_topup_amount' => $amount,
+                            'wallet_topup' => true
+                        );
+                        
+                        // Add product to cart
+                        $added = WC()->cart->add_to_cart($wallet_product_id, 1, 0, array(), $cart_item_data);
+                        
+                        if ($added) {
+                            // Redirect to checkout
+                            wp_safe_redirect(wc_get_checkout_url());
+                            exit;
+                        }
+                    }
+                }
+            }
+            ?>
         </div>
         <?php
     } elseif ($atts['style'] === 'minimal') {
         ?>
         <div class="osk-wallet-topup-form-minimal">
-            <form method="post" action="<?php echo wc_get_page_permalink('cart'); ?>">
-                <input type="hidden" name="add-to-cart" value="<?php echo esc_attr($product_id); ?>">
+            <form method="post" action="">
+                <?php wp_nonce_field('wallet_topup_action', 'wallet_topup_nonce'); ?>
+                <input type="hidden" name="action" value="add_to_wallet">
                 
                 <div style="display: flex; gap: 10px;">
                     <div style="flex: 1; position: relative;">
@@ -194,12 +301,12 @@ function osk_wallet_topup_form_shortcode($atts) {
                                step="0.01" 
                                min="<?php echo esc_attr($min_amount); ?>" 
                                max="<?php echo esc_attr($max_amount); ?>" 
-                               name="topup_custom_amount" 
+                               name="amount" 
                                value="<?php echo esc_attr($default_amount); ?>"
                                style="width: 100%; padding: 8px 8px 8px 25px; border: 1px solid #ddd; border-radius: 4px;"
                                required>
                     </div>
-                    <button type="submit" 
+                    <button type="submit" name="add_to_wallet_submit"
                             style="background: #28a745; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer;">
                         <?php _e('Add', 'ordersoftwarekeys-wallet'); ?>
                     </button>
@@ -229,8 +336,9 @@ function osk_wallet_topup_form_shortcode($atts) {
             <?php endif; ?>
             
             <div style="background: #f8f9fa; border-radius: 8px; padding: 25px; border: 1px solid #dee2e6;">
-                <form method="post" action="<?php echo wc_get_page_permalink('cart'); ?>">
-                    <input type="hidden" name="add-to-cart" value="<?php echo esc_attr($product_id); ?>">
+                <form method="post" action="">
+                    <?php wp_nonce_field('wallet_topup_action', 'wallet_topup_nonce'); ?>
+                    <input type="hidden" name="action" value="add_to_wallet">
                     
                     <div style="margin-bottom: 20px;">
                         <label style="display: block; margin-bottom: 10px; font-weight: bold; color: #333; text-align: center;">
@@ -246,7 +354,7 @@ function osk_wallet_topup_form_shortcode($atts) {
                                        step="0.01" 
                                        min="<?php echo esc_attr($min_amount); ?>" 
                                        max="<?php echo esc_attr($max_amount); ?>" 
-                                       name="topup_custom_amount" 
+                                       name="amount" 
                                        id="topup_amount_<?php echo uniqid(); ?>" 
                                        value="<?php echo esc_attr($default_amount); ?>"
                                        style="width: 180px; padding: 12px 12px 12px 35px; font-size: 18px; text-align: center; border: 2px solid #007cba; border-radius: 5px;"
@@ -287,7 +395,7 @@ function osk_wallet_topup_form_shortcode($atts) {
                     </div>
                     
                     <div style="text-align: center;">
-                        <button type="submit" 
+                        <button type="submit" name="add_to_wallet_submit"
                                 style="background: #28a745; color: white; border: none; padding: 15px 30px; border-radius: 5px; font-size: 16px; font-weight: bold; cursor: pointer; transition: all 0.3s;"
                                 onmouseover="this.style.background='#218838';"
                                 onmouseout="this.style.background='#28a745';">
@@ -321,7 +429,7 @@ function osk_wallet_topup_form_shortcode($atts) {
                 
                 // Validate amount on form submission
                 $('form').on('submit', function(e) {
-                    var amountInput = $(this).find('input[name="topup_custom_amount"]');
+                    var amountInput = $(this).find('input[name="amount"]');
                     var amount = parseFloat(amountInput.val());
                     var min = parseFloat(<?php echo $min_amount; ?>);
                     var max = parseFloat(<?php echo $max_amount; ?>);
@@ -336,6 +444,41 @@ function osk_wallet_topup_form_shortcode($atts) {
             });
             </script>
         </div>
+        
+        <?php
+        // Handle form submission
+        if (isset($_POST['add_to_wallet_submit']) && wp_verify_nonce($_POST['wallet_topup_nonce'], 'wallet_topup_action')) {
+            $amount = floatval($_POST['amount']);
+            
+            if ($amount >= $min_amount && $amount <= $max_amount) {
+                if ($wallet_product_id) {
+                    // Clear any existing cart items
+                    WC()->cart->empty_cart();
+                    
+                    // Store amount in session
+                    if (isset(WC()->session)) {
+                        WC()->session->set('wallet_topup_amount', $amount);
+                    }
+                    
+                    // Add to cart with custom data
+                    $cart_item_data = array(
+                        'wallet_topup_amount' => $amount,
+                        'wallet_topup' => true
+                    );
+                    
+                    // Add product to cart
+                    $added = WC()->cart->add_to_cart($wallet_product_id, 1, 0, array(), $cart_item_data);
+                    
+                    if ($added) {
+                        // Redirect to checkout
+                        wp_safe_redirect(wc_get_checkout_url());
+                        exit;
+                    }
+                }
+            }
+        }
+        ?>
+        
         <?php
     }
     
@@ -866,20 +1009,14 @@ function osk_wallet_quick_topup_shortcode($atts) {
         'size' => 'medium' // small, medium, large
     ), $atts, 'wallet_quick_topup');
     
-    // Get the default top-up product
-    $topup_product = get_posts(array(
-        'post_type' => 'product',
-        'meta_key' => '_is_default_wallet_topup',
-        'meta_value' => 'yes',
-        'posts_per_page' => 1
-    ));
+    // Get the wallet top-up product
+    $wallet_product_id = get_option('wallet_topup_product_id');
     
-    if (empty($topup_product)) {
+    if (empty($wallet_product_id)) {
         return '';
     }
     
-    $product_id = $topup_product[0]->ID;
-    $default_amount = get_post_meta($product_id, '_simple_topup_default_amount', true) ?: 10;
+    $default_amount = 10;
     
     // Set button size
     $padding = '10px 20px';
@@ -896,17 +1033,49 @@ function osk_wallet_quick_topup_shortcode($atts) {
     ob_start();
     ?>
     <div class="osk-wallet-quick-topup">
-        <form method="post" action="<?php echo wc_get_page_permalink('cart'); ?>" style="display: inline;">
-            <input type="hidden" name="add-to-cart" value="<?php echo esc_attr($product_id); ?>">
-            <input type="hidden" name="topup_custom_amount" value="<?php echo esc_attr($default_amount); ?>">
+        <form method="post" action="">
+            <?php wp_nonce_field('wallet_topup_action', 'wallet_topup_nonce'); ?>
+            <input type="hidden" name="action" value="add_to_wallet">
+            <input type="hidden" name="amount" value="<?php echo esc_attr($default_amount); ?>">
             
-            <button type="submit" 
+            <button type="submit" name="add_to_wallet_submit"
                     style="background: <?php echo esc_attr($atts['button_color']); ?>; color: white; border: none; padding: <?php echo $padding; ?>; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: <?php echo $font_size; ?>; transition: all 0.3s;"
                     onmouseover="this.style.opacity='0.9'; this.style.transform='translateY(-1px)';"
                     onmouseout="this.style.opacity='1'; this.style.transform='translateY(0)';">
                 <?php echo esc_html($atts['button_text']); ?>
             </button>
         </form>
+        
+        <?php
+        if (isset($_POST['add_to_wallet_submit']) && wp_verify_nonce($_POST['wallet_topup_nonce'], 'wallet_topup_action')) {
+            $amount = floatval($_POST['amount']);
+            
+            if ($wallet_product_id) {
+                // Clear any existing cart items
+                WC()->cart->empty_cart();
+                
+                // Store amount in session
+                if (isset(WC()->session)) {
+                    WC()->session->set('wallet_topup_amount', $amount);
+                }
+                
+                // Add to cart with custom data
+                $cart_item_data = array(
+                    'wallet_topup_amount' => $amount,
+                    'wallet_topup' => true
+                );
+                
+                // Add product to cart
+                $added = WC()->cart->add_to_cart($wallet_product_id, 1, 0, array(), $cart_item_data);
+                
+                if ($added) {
+                    // Redirect to checkout
+                    wp_safe_redirect(wc_get_checkout_url());
+                    exit;
+                }
+            }
+        }
+        ?>
     </div>
     <?php
     
