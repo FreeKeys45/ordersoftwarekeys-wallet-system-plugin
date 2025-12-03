@@ -45,7 +45,7 @@ require_once OSK_WALLET_PATH . 'includes/user-dashboard.php';
 require_once OSK_WALLET_PATH . 'includes/shortcodes.php';
 require_once OSK_WALLET_PATH . 'includes/email-notifications.php';
 require_once OSK_WALLET_PATH . 'includes/create-product.php';
-require_once OSK_WALLET_PATH . 'includes/simple-gateway.php'; // NEW FILE FOR SIMPLE TOP-UP
+require_once OSK_WALLET_PATH . 'includes/simple-gateway.php';
 
 // Initialize plugin
 add_action('plugins_loaded', 'osk_wallet_init');
@@ -394,14 +394,18 @@ function osk_wallet_init_gateway_class() {
             wc_reduce_stock_levels($order->get_id());
             
             // Empty cart
-            WC()->cart->empty_cart();
+            if (WC()->cart) {
+                WC()->cart->empty_cart();
+            }
             
             // Send email notification
-            osk_wallet_send_email($user_id, 'payment_made', array(
-                'amount' => $amount,
-                'order_id' => $order->get_id(),
-                'new_balance' => $new_balance
-            ));
+            if (function_exists('osk_wallet_send_email')) {
+                osk_wallet_send_email($user_id, 'payment_made', array(
+                    'amount' => $amount,
+                    'order_id' => $order->get_id(),
+                    'new_balance' => $new_balance
+                ));
+            }
             
             // Return thank you page redirect
             return array(
@@ -499,11 +503,13 @@ function osk_wallet_process_refund($order_id, $refund_id) {
         ));
         
         // Send email notification
-        osk_wallet_send_email($user_id, 'refund_received', array(
-            'amount' => $refund_amount,
-            'order_id' => $order_id,
-            'new_balance' => $new_balance
-        ));
+        if (function_exists('osk_wallet_send_email')) {
+            osk_wallet_send_email($user_id, 'refund_received', array(
+                'amount' => $refund_amount,
+                'order_id' => $order_id,
+                'new_balance' => $new_balance
+            ));
+        }
     }
 }
 
@@ -705,4 +711,57 @@ function osk_wallet_admin_css() {
         }
     </style>
     <?php
+}
+
+// ====================
+// SESSION MANAGEMENT FOR WALLET (CRITICAL - THIS WAS MISSING!)
+// ====================
+
+// Ensure WooCommerce session is started
+add_action('init', 'osk_wallet_start_session', 1);
+
+function osk_wallet_start_session() {
+    // Start session if not started
+    if (!session_id() && !headers_sent()) {
+        session_start();
+    }
+    
+    // Initialize WooCommerce session
+    if (function_exists('WC') && class_exists('WooCommerce')) {
+        if (!WC()->session->has_session()) {
+            WC()->session->set_customer_session_cookie(true);
+        }
+    }
+}
+
+// Clean up wallet session on logout
+add_action('wp_logout', 'osk_wallet_clear_session');
+
+function osk_wallet_clear_session() {
+    if (isset(WC()->session)) {
+        WC()->session->set('wallet_topup_amount', null);
+    }
+    
+    // Clear any wallet-related session variables
+    if (session_id()) {
+        unset($_SESSION['wallet_topup_amount']);
+    }
+}
+
+// ====================
+// IMPORTANT: Create wallet top-up product on activation
+// ====================
+
+register_activation_hook(__FILE__, 'osk_wallet_create_topup_product');
+
+function osk_wallet_create_topup_product() {
+    // Include the product creation file
+    if (file_exists(OSK_WALLET_PATH . 'includes/create-product.php')) {
+        require_once OSK_WALLET_PATH . 'includes/create-product.php';
+        
+        // Call the function to create the product
+        if (function_exists('osk_wallet_create_default_topup_product')) {
+            osk_wallet_create_default_topup_product();
+        }
+    }
 }
